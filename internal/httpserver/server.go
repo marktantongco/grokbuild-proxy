@@ -96,6 +96,14 @@ func New(opts Options) http.Handler {
 		}
 		handleHealthz(w, r)
 	})
+	// Alias /health for compatibility with BlacklistedAIProxy
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handleHealthz(w, r)
+	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -132,6 +140,15 @@ func New(opts Options) http.Handler {
 
 	protected := Chain(api, mw.LimitConcurrency, mw.LimitBody, mw.RequireClient)
 	mux.Handle("/v1/", protected)
+
+	// Compatibility: BlacklistedAIProxy sends to /messages instead of /v1/messages.
+	// HandleMessages does not depend on URL path, so this is safe.
+	if opts.Anthropic != nil && opts.Config.Anthropic.Enabled {
+		compatMsg := Chain(http.HandlerFunc(opts.Anthropic.HandleMessages), mw.LimitConcurrency, mw.LimitBody, mw.RequireClient)
+		mux.Handle("POST /messages", compatMsg)
+		compatTokens := Chain(http.HandlerFunc(opts.Anthropic.HandleCountTokens), mw.LimitConcurrency, mw.LimitBody, mw.RequireClient)
+		mux.Handle("POST /messages/count_tokens", compatTokens)
+	}
 
 	// Admin Web UI (unauthenticated). Register before /admin/ API so exact
 	// paths and /admin/ui/* assets are not swallowed by RequireAdmin.
